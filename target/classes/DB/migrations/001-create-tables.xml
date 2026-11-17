@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-5.0.xsd">
+
+    <changeSet id="001-clients" author="minibank">
+        <createTable tableName="clients">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_clients"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="email" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uk_clients_email"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="001-accounts" author="minibank">
+        <createTable tableName="accounts">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_accounts"/>
+            </column>
+            <column name="client_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="account_number" type="VARCHAR(34)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="balance" type="NUMERIC(19,4)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="accounts"
+                baseColumnNames="client_id"
+                referencedTableName="clients"
+                referencedColumnNames="id"
+                constraintName="fk_accounts_client"
+                onDelete="RESTRICT" onUpdate="RESTRICT"/>
+    </changeSet>
+
+    <changeSet id="001-transactions" author="minibank">
+        <createTable tableName="transactions">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_transactions"/>
+            </column>
+            <column name="account_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="amount" type="NUMERIC(19,4)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="type" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="transaction_date" type="TIMESTAMP" defaultValueComputed="now()">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="transactions"
+                baseColumnNames="account_id"
+                referencedTableName="accounts"
+                referencedColumnNames="id"
+                constraintName="fk_transactions_account"
+                onDelete="RESTRICT" onUpdate="RESTRICT"/>
+        <sql>
+            ALTER TABLE transactions ADD CONSTRAINT ck_transactions_type
+                CHECK (type IN ('TRANSFER_IN', 'TRANSFER_OUT', 'DEPOSIT', 'WITHDRAWAL'));
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>
