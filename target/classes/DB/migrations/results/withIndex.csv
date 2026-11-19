@@ -1,0 +1,8 @@
+Index Scan using idx_transactions_account_date on transactions  (cost=1.44..683.61 rows=10069 width=41) (actual time=0.023..0.024 rows=0 loops=1)
+  Index Cond: ((account_id = $0) AND (transaction_date >= (CURRENT_TIMESTAMP - '7 days'::interval)) AND (transaction_date <= CURRENT_TIMESTAMP))
+  InitPlan 1 (returns $0)
+    ->  Seq Scan on accounts  (cost=0.00..1.01 rows=1 width=8) (actual time=0.017..0.017 rows=0 loops=1)
+          Filter: ((account_number)::text = 'SEED-ACC-001'::text)
+          Rows Removed by Filter: 1
+Planning Time: 0.249 ms
+Execution Time: 0.053 ms

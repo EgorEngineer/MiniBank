@@ -1,23 +1,25 @@
 package com.minibank;
 
 import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * MiniBank — "MVP", который наспех собрал предыдущий разработчик:
  * вся логика в одном классе, все данные — в HashMap, персистентности
  * нет вообще (перезапуск процесса — и всё пропало).
- *
+ * <p>
  * ПРОБЛЕМА (найдёшь и исправишь, когда дойдёт очередь — модуль 7.1,
  * когда появится @Transactional): в transfer() проверка существования
  * счёта-получателя происходит ПОСЛЕ списания денег со счёта-
  * отправителя. Если счёт-получатель не существует, деньги уже спишутся
  * с первого счёта и "исчезнут" — их некуда вернуть, потому что метод
  * прерывается исключением до зачисления.
- *
+ * <p>
  * Эта проблема не решается на HashMap "в лоб" без искусственных
  * костылей (можно вручную откатывать баланс в catch, но это не
  * настоящее решение) — она по-настоящему решается только когда
@@ -28,67 +30,128 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class BankService {
 
-    private final Map<Long, Client> clients = new HashMap<>();
-    private final Map<Long, Account> accounts = new HashMap<>();
-    private final Map<Long, Transaction> transactions = new HashMap<>();
+  private static Account mapAccount(ResultSet rs) throws SQLException {
+    return new Account(
+        rs.getLong("id"),
+        rs.getLong("client_id"),
+        rs.getString("account_number"),
+        rs.getBigDecimal("balance")
+    );
+  }
 
-    private final AtomicLong clientIdSeq = new AtomicLong(1);
-    private final AtomicLong accountIdSeq = new AtomicLong(1);
-    private final AtomicLong transactionIdSeq = new AtomicLong(1);
-
-    public Client registerClient(String name, String email) {
-        Long id = clientIdSeq.getAndIncrement();
-        Client client = new Client(id, name, email);
-        clients.put(id, client);
-        return client;
+  public Client registerClient(String name, String email) {
+    String sql = "INSERT INTO clients (name, email) VALUES (?, ?) RETURNING id";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setString(1, name);
+      ps.setString(2, email);
+      try (ResultSet rs = ps.executeQuery()) {
+        rs.next();
+        return new Client(rs.getLong("id"), name, email);
+      }
+    } catch (SQLException e) {
+      throw new RuntimeException("registerClient failed", e);
     }
+  }
 
-    public Account openAccount(Long clientId, String accountNumber) {
-        if (!clients.containsKey(clientId)) {
-            throw new IllegalArgumentException("Client not found: " + clientId);
+  public Account openAccount(Long clientId, String accountNumber) {
+    getClient(clientId);
+
+    String sql = "INSERT INTO accounts (client_id, account_number, balance) " +
+        "VALUES (?, ?, 0) RETURNING id, balance";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setLong(1, clientId);
+      ps.setString(2, accountNumber);
+      try (ResultSet rs = ps.executeQuery()) {
+        rs.next();
+        return new Account(
+            rs.getLong("id"), clientId,
+            accountNumber, rs.getBigDecimal("balance")
+        );
+      }
+    } catch (SQLException e) {
+      throw new RuntimeException("openAccount failed", e);
+    }
+  }
+
+  public Account getAccount(Long accountId) {
+    String sql = "SELECT id, client_id, account_number, balance " +
+        "FROM accounts WHERE id = ?";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setLong(1, accountId);
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw new IllegalArgumentException("Accont not found: " + accountId);
         }
-        Long id = accountIdSeq.getAndIncrement();
-        Account account = new Account(id, clientId, accountNumber, BigDecimal.ZERO);
-        accounts.put(id, account);
-        return account;
+        return mapAccount(rs);
+      }
+    } catch (SQLException e) {
+      throw new RuntimeException("getAccount failed", e);
     }
+  }
 
-    public Account getAccount(Long accountId) {
-        Account account = accounts.get(accountId);
-        if (account == null) {
-            throw new IllegalArgumentException("Account not found: " + accountId);
+  public Client getClient(Long clientId) {
+    String sql = "SELECT id, name, email FROM clients WHERE id = ?";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setLong(1, clientId);
+      try (ResultSet rs = ps.executeQuery()) {
+        if (!rs.next()) {
+          throw new IllegalArgumentException("Client not found: " + clientId);
         }
-        return account;
+        return new Client(
+            rs.getLong("id"),
+            rs.getString("name"),
+            rs.getString("email")
+        );
+      }
+    } catch (SQLException e) {
+      throw new RuntimeException("getClient failed", e);
+    }
+  }
+
+  public void transfer(Long fromAccountId, Long toAccountId, BigDecimal amount) {
+    Account from = getAccount(fromAccountId);
+    Account to = getAccount(toAccountId);
+
+    if (from.getBalance().compareTo(amount) < 0) {
+      throw new IllegalStateException(
+          "Not enough money on account " + fromAccountId);
     }
 
-    public Client getClient(Long clientId) {
-        Client client = clients.get(clientId);
-        if (client == null) {
-            throw new IllegalArgumentException("Client not found: " + clientId);
-        }
-        return client;
+    updateBalance(fromAccountId, from.getBalance().subtract(amount));
+    updateBalance(toAccountId, to.getBalance().add(amount));
+
+    recordTransaction(fromAccountId, amount.negate(), "TRANSFER_OUT");
+    recordTransaction(toAccountId, amount, "TRANSFER_IN");
+  }
+
+  private void updateBalance(Long accountId, BigDecimal newBalance) {
+    String sql = "UPDATE accounts SET balance = ? WHERE id = ?";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setBigDecimal(1, newBalance);
+      ps.setLong(2, accountId);
+      ps.executeUpdate();
+    } catch (SQLException e) {
+      throw new RuntimeException("updateBalance failed", e);
     }
+  }
 
-    public void transfer(Long fromAccountId, Long toAccountId, BigDecimal amount) {
-        Account from = getAccount(fromAccountId);
-
-        // Списываем деньги ДО того, как проверили существование счёта-
-        // получателя — если toAccountId не существует, деньги уже
-        // списаны и потеряны.
-        if (from.getBalance().compareTo(amount) < 0) {
-            throw new IllegalStateException("Insufficient funds on account " + fromAccountId);
-        }
-        from.setBalance(from.getBalance().subtract(amount));
-        recordTransaction(fromAccountId, amount.negate(), "TRANSFER_OUT");
-
-        Account to = getAccount(toAccountId); // если бросит исключение — деньги уже пропали
-
-        to.setBalance(to.getBalance().add(amount));
-        recordTransaction(toAccountId, amount, "TRANSFER_IN");
+  private void recordTransaction(Long accountId, BigDecimal amount, String type) {
+    String sql = "INSERT INTO transactions (account_id, amount, type, transaction_date) " +
+        "VALUES (?, ?, ?, ?)";
+    try (Connection c = DataBase.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setLong(1, accountId);
+      ps.setBigDecimal(2, amount);
+      ps.setString(3, type);
+      ps.setTimestamp(4, Timestamp.valueOf(LocalDateTime.now()));
+      ps.executeUpdate();
+    } catch (SQLException e) {
+      throw new RuntimeException("recordTransaction failed", e);
     }
-
-    private void recordTransaction(Long accountId, BigDecimal amount, String type) {
-        Long id = transactionIdSeq.getAndIncrement();
-        transactions.put(id, new Transaction(id, accountId, amount, type, LocalDateTime.now()));
-    }
+  }
 }
