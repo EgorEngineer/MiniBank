@@ -1,0 +1,94 @@
+### Создание первого клиента
+POST http://localhost:8000/clients
+Content-Type: application/json
+
+{
+  "name": "Ivan Petrov",
+  "email": "ivan@example.com"
+}
+
+### Создание второго клиента
+POST http://localhost:8000/clients
+Content-Type: application/json
+
+{
+  "name": "Petr Ivanov",
+  "email": "petr@example.com"
+}
+
+### Открытие счёта первого клиента
+POST http://localhost:8000/accounts
+Content-Type: application/json
+
+{
+  "clientId": 1
+}
+
+### Открытие счёта второго клиента
+POST http://localhost:8000/accounts
+Content-Type: application/json
+
+{
+  "clientId": 2,
+  "accountNumber": "ACC-002"
+}
+
+### Успешный перевод
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": 1,
+  "toAccountId": 2,
+  "amount": 100.0
+}
+
+### Перевод с отрицательной суммой - 400
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": 1,
+  "toAccountId": 2,
+  "amount": -100.00
+}
+
+### Перевод с нулевой суммой - 400
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": 1,
+  "toAccountId": 2,
+  "amount": 0
+}
+
+### Перевод на несуществующий счёт - 404
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": 1,
+  "toAccountId": 999999,
+  "amount": 10.00
+}
+
+### Недостаточно средств - 409
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": 1,
+  "toAccountId": 2,
+  "amount": 999999999.00
+}
+
+###Некорректный JSON (400)
+POST http://localhost:8000/transfer
+Content-Type: application/json
+
+{
+  "fromAccountId": "wrong",
+  "toAccountId": 2,
+  "amount": 100
+}

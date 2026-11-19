@@ -8,7 +8,7 @@ public final class DataBase {
 
   private static final String URL = "jdbc:postgresql://localhost:5432/MiniBank";
   private static final String USER = "postgres";
-  private static final String PASSWORD = "students";
+  private static final String PASSWORD = "postgres";
 
   private DataBase() {
   }

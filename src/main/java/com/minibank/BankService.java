@@ -1,5 +1,7 @@
 package com.minibank;
 
+import com.minibank.server.exception.AccountNotFoundException;
+import com.minibank.server.exception.InsufficientFundsException;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -7,6 +9,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import com.minibank.server.exception.ClientNotFoundException;
+
 
 /**
  * MiniBank — "MVP", который наспех собрал предыдущий разработчик:
@@ -83,7 +87,7 @@ public class BankService {
       ps.setLong(1, accountId);
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) {
-          throw new IllegalArgumentException("Accont not found: " + accountId);
+          throw new AccountNotFoundException(accountId);
         }
         return mapAccount(rs);
       }
@@ -108,7 +112,7 @@ public class BankService {
         );
       }
     } catch (SQLException e) {
-      throw new RuntimeException("getClient failed", e);
+      throw new ClientNotFoundException(clientId);
     }
   }
 
@@ -117,8 +121,7 @@ public class BankService {
     Account to = getAccount(toAccountId);
 
     if (from.getBalance().compareTo(amount) < 0) {
-      throw new IllegalStateException(
-          "Not enough money on account " + fromAccountId);
+      throw new InsufficientFundsException(fromAccountId);
     }
 
     updateBalance(fromAccountId, from.getBalance().subtract(amount));
