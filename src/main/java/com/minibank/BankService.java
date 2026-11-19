@@ -114,6 +114,7 @@ public class BankService {
 
   public void transfer(Long fromAccountId, Long toAccountId, BigDecimal amount) {
     Account from = getAccount(fromAccountId);
+    Account to = getAccount(toAccountId);
 
     if (from.getBalance().compareTo(amount) < 0) {
       throw new IllegalStateException(
@@ -121,9 +122,9 @@ public class BankService {
     }
 
     updateBalance(fromAccountId, from.getBalance().subtract(amount));
-    recordTransaction(fromAccountId, amount.negate(), "TRANSFER_OUT");
-    Account to = getAccount(toAccountId);
     updateBalance(toAccountId, to.getBalance().add(amount));
+
+    recordTransaction(fromAccountId, amount.negate(), "TRANSFER_OUT");
     recordTransaction(toAccountId, amount, "TRANSFER_IN");
   }
 
