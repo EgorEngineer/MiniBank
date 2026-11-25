@@ -1,6 +1,7 @@
 package com.minibank.server.http;
 
 import com.minibank.BankService;
+import com.minibank.Client;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import java.io.IOException;
@@ -32,12 +33,12 @@ public class ClientHandler implements HttpHandler {
         return;
       }
 
-      var client = bankService.registerClient(
+      Client client = bankService.registerClient(
           request.name(),
           request.email()
       );
 
-      HttpUtils.sendResponse(exchange, 200, client);
+      HttpUtils.sendResponse(exchange, 200, ClientResponse.from(client));
 
     } catch (IOException e) {
       HttpUtils.sendError(exchange, 400, "Invalid JSON");
@@ -49,5 +50,12 @@ public class ClientHandler implements HttpHandler {
   }
 
   public record ClientRequest(String name, String email) {
+  }
+
+  public record ClientResponse(Long id, String name, String email) {
+
+    public static ClientResponse from(Client client) {
+      return new ClientResponse(client.getId(), client.getName(), client.getEmail());
+    }
   }
 }

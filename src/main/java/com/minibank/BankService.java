@@ -1,15 +1,11 @@
 package com.minibank;
 
 import com.minibank.server.exception.AccountNotFoundException;
+import com.minibank.server.exception.ClientNotFoundException;
 import com.minibank.server.exception.InsufficientFundsException;
 import java.math.BigDecimal;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
-import com.minibank.server.exception.ClientNotFoundException;
+import java.util.List;
 
 
 /**
@@ -34,127 +30,134 @@ import com.minibank.server.exception.ClientNotFoundException;
  */
 public class BankService {
 
-  private static Account mapAccount(ResultSet rs) throws SQLException {
-    return new Account(
-        rs.getLong("id"),
-        rs.getLong("client_id"),
-        rs.getString("account_number"),
-        rs.getBigDecimal("balance")
-    );
-  }
-
   public Client registerClient(String name, String email) {
-    String sql = "INSERT INTO clients (name, email) VALUES (?, ?) RETURNING id";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setString(1, name);
-      ps.setString(2, email);
-      try (ResultSet rs = ps.executeQuery()) {
-        rs.next();
-        return new Client(rs.getLong("id"), name, email);
-      }
-    } catch (SQLException e) {
-      throw new RuntimeException("registerClient failed", e);
-    }
+    return JpaUtils.inTransaction(em -> {
+      Client client = new Client(name, email);
+      em.persist(client);
+      return client;
+    });
   }
 
   public Account openAccount(Long clientId, String accountNumber) {
-    getClient(clientId);
-
-    String sql = "INSERT INTO accounts (client_id, account_number, balance) " +
-        "VALUES (?, ?, 0) RETURNING id, balance";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setLong(1, clientId);
-      ps.setString(2, accountNumber);
-      try (ResultSet rs = ps.executeQuery()) {
-        rs.next();
-        return new Account(
-            rs.getLong("id"), clientId,
-            accountNumber, rs.getBigDecimal("balance")
-        );
+    return JpaUtils.inTransaction(em -> {
+      Client client = em.find(Client.class, clientId);
+      if (client == null) {
+        throw new ClientNotFoundException(clientId);
       }
-    } catch (SQLException e) {
-      throw new RuntimeException("openAccount failed", e);
-    }
+
+      Account account = new Account(client, accountNumber);
+      em.persist(account);
+      return account;
+    });
   }
 
   public Account getAccount(Long accountId) {
-    String sql = "SELECT id, client_id, account_number, balance " +
-        "FROM accounts WHERE id = ?";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setLong(1, accountId);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          throw new AccountNotFoundException(accountId);
-        }
-        return mapAccount(rs);
+    return JpaUtils.inTransaction(em -> {
+      Account account = em.find(Account.class, accountId);
+      if (account == null) {
+        throw new AccountNotFoundException(accountId);
       }
-    } catch (SQLException e) {
-      throw new RuntimeException("getAccount failed", e);
-    }
+      return account;
+    });
   }
 
   public Client getClient(Long clientId) {
-    String sql = "SELECT id, name, email FROM clients WHERE id = ?";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setLong(1, clientId);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) {
-          throw new IllegalArgumentException("Client not found: " + clientId);
-        }
-        return new Client(
-            rs.getLong("id"),
-            rs.getString("name"),
-            rs.getString("email")
-        );
+    return JpaUtils.inTransaction(em -> {
+      Client client = em.find(Client.class, clientId);
+      if (client == null) {
+        throw new ClientNotFoundException(clientId);
       }
-    } catch (SQLException e) {
-      throw new ClientNotFoundException(clientId);
-    }
+      return client;
+    });
+  }
+
+  public List<Client> getAllClientsWithAccounts() {
+    return JpaUtils.inTransaction(em ->
+        em.createQuery("""
+                SELECT DISTINCT c
+                FROM Client c
+                LEFT JOIN FETCH c.accounts
+                ORDER BY c.id
+                """, Client.class)
+            .getResultList()
+    );
+  }
+
+  public Client getClientWithAccounts(Long clientId) {
+    return JpaUtils.inTransaction(em -> {
+      List<Client> result = em.createQuery("""
+              SELECT DISTINCT c
+              FROM Client c
+              LEFT JOIN FETCH c.accounts
+              WHERE c.id = :clientId
+              """, Client.class)
+          .setParameter("clientId", clientId)
+          .getResultList();
+
+      if (result.isEmpty()) {
+        throw new ClientNotFoundException(clientId);
+      }
+      return result.get(0);
+    });
   }
 
   public void transfer(Long fromAccountId, Long toAccountId, BigDecimal amount) {
-    Account from = getAccount(fromAccountId);
-    Account to = getAccount(toAccountId);
+    JpaUtils.runInTransaction(em -> {
+      Account from = em.find(Account.class, fromAccountId);
+      if (from == null) {
+        throw new AccountNotFoundException(fromAccountId);
+      }
 
-    if (from.getBalance().compareTo(amount) < 0) {
-      throw new InsufficientFundsException(fromAccountId);
-    }
+      Account to = em.find(Account.class, toAccountId);
+      if (to == null) {
+        throw new AccountNotFoundException(toAccountId);
+      }
 
-    updateBalance(fromAccountId, from.getBalance().subtract(amount));
-    updateBalance(toAccountId, to.getBalance().add(amount));
+      if (from.getBalance().compareTo(amount) < 0) {
+        throw new InsufficientFundsException(fromAccountId);
+      }
 
-    recordTransaction(fromAccountId, amount.negate(), "TRANSFER_OUT");
-    recordTransaction(toAccountId, amount, "TRANSFER_IN");
+      from.setBalance(from.getBalance().subtract(amount));
+      to.setBalance(to.getBalance().add(amount));
+
+      LocalDateTime now = LocalDateTime.now();
+      em.persist(new Transaction(from, amount.negate(), "TRANSFER_OUT", now));
+      em.persist(new Transaction(to, amount, "TRANSFER_IN", now));
+    });
   }
 
-  private void updateBalance(Long accountId, BigDecimal newBalance) {
-    String sql = "UPDATE accounts SET balance = ? WHERE id = ?";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setBigDecimal(1, newBalance);
-      ps.setLong(2, accountId);
-      ps.executeUpdate();
-    } catch (SQLException e) {
-      throw new RuntimeException("updateBalance failed", e);
-    }
+  public void removeAccountFromClient(Long clientId, Long accountId) {
+    JpaUtils.runInTransaction(em -> {
+      List<Client> result = em.createQuery("""
+              SELECT DISTINCT c
+              FROM Client c
+              LEFT JOIN FETCH c.accounts
+              WHERE c.id = :clientId
+              """, Client.class)
+          .setParameter("clientId", clientId)
+          .getResultList();
+
+      if (result.isEmpty()) {
+        throw new ClientNotFoundException(clientId);
+      }
+
+      Client client = result.get(0);
+      Account account = client.getAccounts().stream()
+          .filter(a -> a.getId().equals(accountId))
+          .findFirst()
+          .orElseThrow(() -> new AccountNotFoundException(accountId));
+
+      client.removeAccount(account);
+    });
   }
 
-  private void recordTransaction(Long accountId, BigDecimal amount, String type) {
-    String sql = "INSERT INTO transactions (account_id, amount, type, transaction_date) " +
-        "VALUES (?, ?, ?, ?)";
-    try (Connection c = DataBase.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setLong(1, accountId);
-      ps.setBigDecimal(2, amount);
-      ps.setString(3, type);
-      ps.setTimestamp(4, Timestamp.valueOf(LocalDateTime.now()));
-      ps.executeUpdate();
-    } catch (SQLException e) {
-      throw new RuntimeException("recordTransaction failed", e);
-    }
+  public long countAccountsInDb(Long clientId) {
+    return JpaUtils.inTransaction(em ->
+        em.createQuery(
+                "SELECT COUNT(a) FROM Account a WHERE a.client.id = :clientId",
+                Long.class)
+            .setParameter("clientId", clientId)
+            .getSingleResult()
+    );
   }
 }

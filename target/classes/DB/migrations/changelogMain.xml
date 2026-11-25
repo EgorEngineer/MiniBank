@@ -9,5 +9,6 @@
     <include file="001-create-tables.xml" relativeToChangelogFile="true"/>
     <include file="002-add-index.xml" relativeToChangelogFile="true"/>
     <include file="003-seed-transactions.xml" relativeToChangelogFile="true"/>
+    <include file="004-seed-random-clients.xml" relativeToChangelogFile="true"/>
 
 </databaseChangeLog>
